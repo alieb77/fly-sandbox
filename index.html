@@ -83,7 +83,6 @@
   <button id="btnOdor" class="on">➕ Mode odeur <span class="kbd">O</span></button>
   <button id="btnRw" class="rw">🍬 Récompense <span class="kbd">R</span></button>
   <button id="btnPn" class="pn">⚡ Punition <span class="kbd">P</span></button>
-  <button id="btnFlip" style="display:none">🔀 Inverser</button>
   <div class="sld">vitesse sim<input id="sSpeed" type="range" min="1" max="12" value="6"></div>
   <div class="sld">portée odeur<input id="sRange" type="range" min="3" max="14" value="7"></div>
   <div class="sld">apprentissage<input id="sEta" type="range" min="0" max="100" value="45"></div>
@@ -91,15 +90,19 @@
   <button id="btnReset">♻︎ Reset</button>
 </div>
 
-<div id="game" class="panel" style="display:none;bottom:118px;left:50%;transform:translateX(-50%);min-width:320px">
-  <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px">
-    <b>Apprentissage de lieu (opérant)</b><span id="g_trial" style="color:var(--muted)">0 s</span></div>
-  <div class="meter"><div class="lab"><span>Préférence pour la zone sûre</span><span id="g_pref">50%</span></div>
-    <div class="bar"><i id="g_prefbar" style="background:var(--pam);width:50%"></i></div></div>
-  <div style="display:flex;gap:10px;font-size:11px;margin-top:4px">
-    <span id="g_state" style="flex:1">—</span>
-    <span style="color:var(--ppl1)">zone brûlante</span><span style="color:var(--pam)">zone sûre</span>
-  </div>
+<div id="game" class="panel" style="display:none;bottom:118px;left:50%;transform:translateX(-50%);min-width:340px">
+  <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+    <b>Dressage opérant — tu es l'entraîneur</b><span id="g_trial" style="color:var(--muted)">0 s</span></div>
+  <div style="font-size:11px;color:var(--muted);margin-bottom:7px">Les zones ne font rien seules. Quand la mouche est dans une zone, appuie <b style="color:var(--pam)">R/🍬</b> pour la récompenser ou <b style="color:var(--ppl1)">P/⚡</b> pour la punir.</div>
+  <div style="display:flex;align-items:center;gap:7px;font-size:11px;margin:3px 0">
+    <span style="width:70px;color:var(--muted)">zone gauche</span>
+    <span id="g_lbar" class="vbar" style="flex:1;height:7px;border-radius:5px;background:#0c1420;position:relative"><i style="position:absolute;top:0;bottom:0;left:50%;width:2px;background:var(--muted)"></i><b></b></span>
+    <span id="g_lval" style="width:80px;text-align:right">neutre</span></div>
+  <div style="display:flex;align-items:center;gap:7px;font-size:11px;margin:3px 0">
+    <span style="width:70px;color:var(--muted)">zone droite</span>
+    <span id="g_rbar" class="vbar" style="flex:1;height:7px;border-radius:5px;background:#0c1420;position:relative"><i style="position:absolute;top:0;bottom:0;left:50%;width:2px;background:var(--muted)"></i><b></b></span>
+    <span id="g_rval" style="width:80px;text-align:right">neutre</span></div>
+  <div id="g_state" style="font-size:11px;margin-top:5px">—</div>
 </div>
 
 <div id="err" class="panel"></div>
@@ -300,7 +303,7 @@ function addOdor(x,z){
 const ray=new THREE.Raycaster(); const ndc=new THREE.Vector2();
 let addMode=true;
 renderer.domElement.addEventListener('pointerdown',(ev)=>{
-  if(!addMode) return;
+  if(!addMode || gameMode) return;
   ndc.x=(ev.clientX/innerWidth)*2-1; ndc.y=-(ev.clientY/innerHeight)*2+1;
   ray.setFromCamera(ndc,camera);
   const hit=ray.intersectObject(ground)[0];
@@ -323,7 +326,8 @@ $('btnReset').onclick=()=>{
   odors.length=0; pW.set(pW0); recomputeKcOut(); eligKC.fill(0); DApam=DAppl1=0;
   V.fill(0); g.fill(0); ref.fill(0); spike.fill(0); spikePrev.fill(0);
   flyPos.set(0,1.1,0); heading=0; trailN=0; renderOdorList();
-  if(gameMode){ baseL=ctxDrive(leftKC)||1e-6; baseR=ctxDrive(rightKC)||1e-6; prefEMA=0.5; gameTime=0; }
+  if(gameMode){ baseL=ctxDrive(leftKC)||1e-6; baseR=ctxDrive(rightKC)||1e-6; gameTime=0;
+    for(const f of [leftFloor,rightFloor]){ f.material.color.setHex(NEUTRAL); f.material.emissive.setHex(NEUTRAL); } }
 };
 let simSpeed=6;
 $('sSpeed').oninput=e=>simSpeed=+e.target.value;
@@ -357,8 +361,9 @@ function renderOdorList(){
 // ---------------------------------------------------------------------------
 // Heat-box operant place-learning mode
 // ---------------------------------------------------------------------------
-let gameMode=false, hotIsLeft=true, prefEMA=0.5, gameTime=0;
-// context = which half the fly is in; each side has its own KC ensemble
+let gameMode=false, gameTime=0;
+// two zones = two sensory contexts (each its own KC ensemble). Zones do NOTHING
+// on their own: the trainer (you) delivers reward/pain with the R/P buttons.
 function pickEns(exclude){
   const s=new Set(exclude||[]); const out=[];
   while(out.length<nEns){ const k=(Math.random()*nKC)|0; if(!s.has(k)){s.add(k);out.push(k);} }
@@ -367,38 +372,32 @@ function pickEns(exclude){
 const leftKC=pickEns(), rightKC=pickEns(leftKC);
 let baseL=0, baseR=0;
 function ctxDrive(ens){ let d=0; for(const k of ens) d+=kcOutSum[k]; return d/ens.length; }
-// floor halves
-const halfMat=(c)=>new THREE.MeshStandardMaterial({color:c,transparent:true,opacity:0.55,emissive:c,emissiveIntensity:0.25,side:THREE.DoubleSide});
-const leftFloor=new THREE.Mesh(new THREE.CircleGeometry(ARENA-0.2,48,Math.PI/2,Math.PI),halfMat(0x2a6a4a));
-const rightFloor=new THREE.Mesh(new THREE.CircleGeometry(ARENA-0.2,48,-Math.PI/2,Math.PI),halfMat(0x8a2a2a));
+const NEUTRAL=0x333a44;
+const halfMat=(c)=>new THREE.MeshStandardMaterial({color:c,transparent:true,opacity:0.5,emissive:c,emissiveIntensity:0.25,side:THREE.DoubleSide});
+const leftFloor=new THREE.Mesh(new THREE.CircleGeometry(ARENA-0.2,48,Math.PI/2,Math.PI),halfMat(NEUTRAL));
+const rightFloor=new THREE.Mesh(new THREE.CircleGeometry(ARENA-0.2,48,-Math.PI/2,Math.PI),halfMat(NEUTRAL));
 for(const f of [leftFloor,rightFloor]){ f.rotation.x=-Math.PI/2; f.position.y=0.03; f.visible=false; scene.add(f); }
 const boundary=new THREE.Mesh(new THREE.BoxGeometry(0.25,0.05,ARENA*2),
   new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.4}));
 boundary.position.y=0.04; boundary.visible=false; scene.add(boundary);
-
-function paintFloors(){
-  // left/right physical sides; hot side = red, safe = green
-  const hotMesh = hotIsLeft?leftFloor:rightFloor, safeMesh = hotIsLeft?rightFloor:leftFloor;
-  hotMesh.material.color.setHex(0x8a2a2a); hotMesh.material.emissive.setHex(0x8a2a2a);
-  safeMesh.material.color.setHex(0x2a6a4a); safeMesh.material.emissive.setHex(0x2a6a4a);
-}
+function zoneColor(val){ const a=Math.max(-1,Math.min(1,val));
+  return new THREE.Color(NEUTRAL).lerp(new THREE.Color(a>=0?0x2a6a4a:0x8a2a2a), Math.min(1,Math.abs(a)*1.4)); }
+function setGbar(id,val){ const a=Math.max(-1,Math.min(1,val)); const b=$(id+'bar').querySelector('b');
+  const pos=a>=0; b.style.cssText=`position:absolute;top:0;bottom:0;border-radius:5px;${pos?'left:50%;background:var(--pam)':'right:50%;background:var(--ppl1)'};width:${Math.abs(a)*50}%`; }
 function startGame(){
-  gameMode=true; $('game').style.display='block'; $('btnFlip').style.display='';
-  toggle($('btnMode'),true);
-  leftFloor.visible=rightFloor.visible=boundary.visible=true; paintFloors();
-  // clear free-mode odors
+  gameMode=true; $('game').style.display='block'; toggle($('btnMode'),true);
+  leftFloor.visible=rightFloor.visible=boundary.visible=true;
+  for(const f of [leftFloor,rightFloor]){ f.material.color.setHex(NEUTRAL); f.material.emissive.setHex(NEUTRAL); }
   for(const o of odors){scene.remove(o.mesh);scene.remove(o.halo);} odors.length=0;
   pW.set(pW0); recomputeKcOut(); eligKC.fill(0); DApam=DAppl1=0;
   baseL=ctxDrive(leftKC)||1e-6; baseR=ctxDrive(rightKC)||1e-6;
-  prefEMA=0.5; gameTime=0;
-  flyPos.set(hotIsLeft? -ARENA*0.5 : ARENA*0.5, 1.1, 0);  // start IN the hot half
+  gameTime=0; flyPos.set(0,1.1,0);
 }
 function stopGame(){
-  gameMode=false; $('game').style.display='none'; $('btnFlip').style.display='none';
-  toggle($('btnMode'),false); leftFloor.visible=rightFloor.visible=boundary.visible=false;
+  gameMode=false; $('game').style.display='none'; toggle($('btnMode'),false);
+  leftFloor.visible=rightFloor.visible=boundary.visible=false;
 }
 $('btnMode').onclick=()=> gameMode?stopGame():startGame();
-$('btnFlip').onclick=()=>{ hotIsLeft=!hotIsLeft; paintFloors(); };
 
 // ---------------------------------------------------------------------------
 // Main loop
@@ -422,11 +421,11 @@ function frame(){
     if(stimRw) for(const k of idxPAM) Iext[k]+=I_STIM;
     if(stimPn) for(const k of idxPPL1) Iext[k]+=I_STIM;
   } else {
-    // HEAT-BOX: context = current half; reward/punish is AUTOMATIC by position
+    // HEAT-BOX: zones are pure context; YOU deliver reward/pain via R / P
     const onLeft=flyPos.x<0, ens=onLeft?leftKC:rightKC;
-    for(const k of ens) Iext[kcGlobal[k]]+=I_ODOR;         // immersed in this context
-    if(onLeft===hotIsLeft){ for(const k of idxPPL1) Iext[k]+=I_STIM; painNow=true; }
-    else                  { for(const k of idxPAM ) Iext[k]+=I_STIM; }
+    for(const k of ens) Iext[kcGlobal[k]]+=I_ODOR;         // fly senses the zone it is in
+    if(stimRw){ for(const k of idxPAM ) Iext[k]+=I_STIM; }
+    if(stimPn){ for(const k of idxPPL1) Iext[k]+=I_STIM; painNow=true; }
   }
 
   // ---- run the connectome LIF ----
@@ -454,26 +453,30 @@ function frame(){
     }
     kcActive=kcActive*0.8 + ka*0.2;
   } else {
-    // heat-box: valence of each half -> flee the aversive one
-    const onLeft=flyPos.x<0, isHot=(onLeft===hotIsLeft);
+    // heat-box: the fly reacts to what it has LEARNED about each zone
+    const onLeft=flyPos.x<0;
     const valL=(baseL-ctxDrive(leftKC))/baseL, valR=(baseR-ctxDrive(rightKC))/baseR;
     const curVal=onLeft?valL:valR;
-    const safeCenterX = hotIsLeft? +ARENA*0.5 : -ARENA*0.5;
-    if(curVal < -0.02){                     // aversive -> escape toward safe half
-      sx += (safeCenterX-flyPos.x)*0.18; sz += -flyPos.z*0.04;
-    } else if(!isHot && curVal>0.05){       // comfortable -> linger near safe centre
-      sx += (safeCenterX-flyPos.x)*0.03; atFood = curVal>0.2;
+    const thisCenterX = onLeft? -ARENA*0.5 : +ARENA*0.5;
+    const otherCenterX= onLeft? +ARENA*0.5 : -ARENA*0.5;
+    if(curVal < -0.02){                     // learned-aversive -> flee to the other zone
+      sx += (otherCenterX-flyPos.x)*0.18; sz += -flyPos.z*0.04;
+    } else if(curVal > 0.05){               // learned-attractive -> linger here
+      sx += (thisCenterX-flyPos.x)*0.03; atFood = curVal>0.2;
     }
-    arousal = Math.min(1, DAppl1*0.5);
+    arousal = Math.min(1, Math.max(DApam,DAppl1)*0.5);
     kcActive = kcActive*0.8 + nEns*0.2;
-    const hotMesh=hotIsLeft?leftFloor:rightFloor;
-    hotMesh.material.emissiveIntensity = painNow ? 0.5+0.3*Math.sin(performance.now()*0.02) : 0.25;
-    prefEMA = prefEMA*0.997 + (isHot?0:1)*0.003; gameTime += rdt;
-    $('g_pref').textContent=(prefEMA*100).toFixed(0)+'%';
-    $('g_prefbar').style.width=(prefEMA*100).toFixed(0)+'%';
+    leftFloor.material.color.copy(zoneColor(valL)); leftFloor.material.emissive.copy(zoneColor(valL));
+    rightFloor.material.color.copy(zoneColor(valR)); rightFloor.material.emissive.copy(zoneColor(valR));
+    (onLeft?leftFloor:rightFloor).material.emissiveIntensity =
+      (stimRw||stimPn) ? 0.55+0.3*Math.sin(performance.now()*0.02) : 0.28;
+    gameTime += rdt;
+    const fmt=v=> v>0.05?`+${(v*100).toFixed(0)}% approche`: v<-0.05?`${(v*100).toFixed(0)}% évite`:'neutre';
+    setGbar('g_l',valL); setGbar('g_r',valR);
+    $('g_lval').textContent=fmt(valL); $('g_rval').textContent=fmt(valR);
     $('g_trial').textContent=gameTime.toFixed(0)+' s';
-    $('g_state').textContent = isHot ? '🔥 zone brûlante (douleur)' : '✅ zone sûre (plaisir)';
-    $('g_state').style.color = isHot ? 'var(--ppl1)' : 'var(--pam)';
+    const stim = stimRw?'🍬 récompense':stimPn?'⚡ douleur':'—';
+    $('g_state').innerHTML=`Mouche dans la zone <b>${onLeft?'gauche':'droite'}</b> · tu envoies : <b>${stim}</b>`;
   }
 
   // ---- shared: wander, turn, walk/stop bouts, move ----
