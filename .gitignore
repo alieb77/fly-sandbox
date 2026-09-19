@@ -1,0 +1,8 @@
+# large / regenerable data — never commit
+*.feather
+*.npz
+data/
+__pycache__/
+*.pyc
+.vercel
+.DS_Store

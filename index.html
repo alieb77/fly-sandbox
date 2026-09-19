@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fly Sandbox — cerveau connectome</title>
+<style>
+  :root{
+    --bg:#0b0f16; --panel:#141b28cc; --ink:#e6edf6; --muted:#8aa0b8;
+    --kc:#4C78A8; --mbon:#E45756; --pam:#59A14F; --ppl1:#B07AA1; --line:#25324a;
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){ --bg:#0b0f16; }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Arial,sans-serif;overflow:hidden}
+  #app{position:fixed;inset:0}
+  canvas{display:block}
+  .panel{position:absolute;background:var(--panel);backdrop-filter:blur(8px);
+    border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  #title{top:12px;left:12px;max-width:340px}
+  #title h1{margin:0 0 4px;font-size:15px;letter-spacing:.2px}
+  #title p{margin:0;font-size:12px;color:var(--muted);line-height:1.45}
+  #meters{top:12px;right:12px;width:230px;font-size:12px}
+  .meter{margin:6px 0}
+  .meter .lab{display:flex;justify-content:space-between;color:var(--muted);margin-bottom:3px}
+  .bar{height:8px;border-radius:6px;background:#0c1420;overflow:hidden}
+  .bar>i{display:block;height:100%;width:0;border-radius:6px;transition:width .1s}
+  #odorlist{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
+  #odorlist .o{display:flex;align-items:center;gap:7px;margin:4px 0;font-size:11px}
+  #odorlist .dot{width:12px;height:12px;border-radius:50%;flex:none}
+  #odorlist .vbar{flex:1;height:7px;border-radius:5px;background:#0c1420;position:relative}
+  #odorlist .vbar>i{position:absolute;top:0;bottom:0;left:50%;width:2px;background:var(--muted)}
+  #odorlist .vbar>b{position:absolute;top:0;bottom:0;border-radius:5px}
+  #controls{bottom:12px;left:50%;transform:translateX(-50%);display:flex;
+    gap:10px;align-items:center;flex-wrap:wrap;max-width:96vw;justify-content:center}
+  button{font:inherit;font-size:13px;color:var(--ink);background:#1b2536;
+    border:1px solid var(--line);border-radius:9px;padding:9px 13px;cursor:pointer;
+    user-select:none;transition:.12s}
+  button:hover{border-color:#3a506f}
+  button.on{background:#22314a;border-color:#4d6da0}
+  button.rw.on{background:#1f3a26;border-color:var(--pam)}
+  button.pn.on{background:#3a2438;border-color:var(--ppl1)}
+  .sld{display:flex;flex-direction:column;font-size:10px;color:var(--muted);gap:2px}
+  .sld input{width:110px}
+  .kbd{font-size:10px;color:var(--muted);margin-left:2px}
+  #hint{position:absolute;bottom:70px;left:50%;transform:translateX(-50%);
+    font-size:12px;color:var(--muted);background:#0c1420aa;padding:5px 10px;border-radius:8px}
+  #err{position:absolute;inset:0;display:none;place-items:center;padding:24px;
+    text-align:center;color:#ffb3b3;font-size:14px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="title" class="panel">
+  <h1>🪰 Fly Sandbox — cerveau réel</h1>
+  <p>Le cerveau de cette mouche = <b>5 596 neurones du connectome FlyWire</b>
+  (circuit récompense du corps pédonculé), simulé en direct (LIF).
+  Pose des odeurs, amène la mouche près de l'une puis maintiens
+  <span style="color:var(--pam)">🍬 Récompense</span> : la synapse odeur→sortie
+  se déprime, l'odeur devient <b>attractive</b>. <span style="color:var(--ppl1)">⚡ Punition</span>
+  fait l'inverse.</p>
+</div>
+
+<div id="meters" class="panel">
+  <div class="meter"><div class="lab"><span>KC actifs (odeur)</span><span id="v_kc">0</span></div>
+    <div class="bar"><i id="b_kc" style="background:var(--kc)"></i></div></div>
+  <div class="meter"><div class="lab"><span>MBON (évitement)</span><span id="v_mbon">0</span></div>
+    <div class="bar"><i id="b_mbon" style="background:var(--mbon)"></i></div></div>
+  <div class="meter"><div class="lab"><span>Dopamine récompense</span><span id="v_da">0</span></div>
+    <div class="bar"><i id="b_da" style="background:var(--pam)"></i></div></div>
+  <div class="meter"><div class="lab"><span>Dopamine punition</span><span id="v_dp">0</span></div>
+    <div class="bar"><i id="b_dp" style="background:var(--ppl1)"></i></div></div>
+  <div id="odorlist"><div style="color:var(--muted);font-size:11px">Odeurs (valence apprise)</div></div>
+</div>
+
+<div id="hint">Clique le sol pour poser une odeur • R = récompense • P = punition • molette = zoom</div>
+
+<div id="controls" class="panel">
+  <button id="btnOdor" class="on">➕ Mode odeur <span class="kbd">O</span></button>
+  <button id="btnRw" class="rw">🍬 Récompense <span class="kbd">R</span></button>
+  <button id="btnPn" class="pn">⚡ Punition <span class="kbd">P</span></button>
+  <div class="sld">vitesse sim<input id="sSpeed" type="range" min="1" max="12" value="6"></div>
+  <div class="sld">portée odeur<input id="sRange" type="range" min="3" max="14" value="7"></div>
+  <div class="sld">apprentissage<input id="sEta" type="range" min="0" max="100" value="45"></div>
+  <button id="btnFollow" class="on">🎥 Suivre <span class="kbd">F</span></button>
+  <button id="btnReset">♻︎ Reset</button>
+</div>
+
+<div id="err" class="panel"></div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const errBox = document.getElementById('err');
+const fail = (m)=>{ errBox.style.display='grid'; errBox.textContent='Erreur : '+m; console.error(m); };
+
+// ---------------------------------------------------------------------------
+// Load the connectome network
+// ---------------------------------------------------------------------------
+let NET;
+try {
+  NET = await fetch('./network.json').then(r=>{ if(!r.ok) throw new Error('network.json '+r.status); return r.json(); });
+} catch(e){ fail('Impossible de charger network.json — '+e.message); throw e; }
+
+const N = NET.N;
+const idxKC = Int32Array.from(NET.idxKC);
+const idxMBON = Int32Array.from(NET.idxMBON);
+const idxPAM = Int32Array.from(NET.idxPAM);
+const idxPPL1 = Int32Array.from(NET.idxPPL1);
+const nKC = idxKC.length, nMBON = idxMBON.length;
+
+// ---------------------------------------------------------------------------
+// LIF engine state
+// ---------------------------------------------------------------------------
+const dt=0.5, tauM=20, tauSyn=5, Vth=1, Vreset=0, refSteps=4;
+const aSyn=Math.exp(-dt/tauSyn), kM=dt/tauM;
+const tauElig=40, aElig=Math.exp(-dt/tauElig);
+const tauDA=100, aDA=Math.exp(-dt/tauDA);
+const G=0.03, I_ODOR=2.0, I_STIM=2.0;
+let ETA = 2.2e-6;  // set by slider
+
+const V=new Float32Array(N), g=new Float32Array(N);
+const ref=new Int16Array(N), spike=new Uint8Array(N), spikePrev=new Uint8Array(N);
+const eligKC=new Float32Array(nKC);
+let DApam=0, DAppl1=0;
+
+// fast synapses
+const fPre=Int32Array.from(NET.fast.pre), fPost=Int32Array.from(NET.fast.post);
+const fW=Float32Array.from(NET.fast.w.map(x=>x*G));
+// plastic KC->MBON synapses (local indices)
+const pKC=Int32Array.from(NET.plastic.kc), pMB=Int32Array.from(NET.plastic.mbon);
+const pW0=Float32Array.from(NET.plastic.w.map(x=>x*G));
+let pW=Float32Array.from(pW0);
+const nPl=pW.length;
+// map local KC -> global, and per-KC output-sum
+const kcGlobal=idxKC, mbGlobal=idxMBON;
+const kcOutSum=new Float32Array(nKC);
+function recomputeKcOut(){ kcOutSum.fill(0); for(let p=0;p<nPl;p++) kcOutSum[pKC[p]]+=pW[p]; }
+recomputeKcOut();
+
+const Iext=new Float32Array(N);
+
+let stimRw=false, stimPn=false;
+let mbonRate=0, kcActive=0;
+
+function step(){
+  // synaptic decay
+  for(let i=0;i<N;i++) g[i]*=aSyn;
+  // deliver spikes from previous substep
+  for(let e=0;e<fPre.length;e++){ if(spikePrev[fPre[e]]) g[fPost[e]]+=fW[e]; }
+  for(let p=0;p<nPl;p++){ if(spikePrev[kcGlobal[pKC[p]]]) g[mbGlobal[pMB[p]]]+=pW[p]; }
+  // integrate
+  for(let i=0;i<N;i++){
+    if(ref[i]>0){ ref[i]--; spike[i]=0; continue; }
+    V[i]+= kM*(-(V[i]) + Iext[i] + g[i]);
+    if(V[i]>=Vth){ V[i]=Vreset; ref[i]=refSteps; spike[i]=1; }
+    else spike[i]=0;
+  }
+  // dopamine from PAM / PPL1 population activity
+  let sp=0; for(let k=0;k<idxPAM.length;k++) sp+=spike[idxPAM[k]];
+  DApam = DApam*aDA + sp/Math.max(idxPAM.length,1);
+  let sn=0; for(let k=0;k<idxPPL1.length;k++) sn+=spike[idxPPL1[k]];
+  DAppl1 = DAppl1*aDA + sn/Math.max(idxPPL1.length,1);
+  // eligibility (KC) + plasticity
+  const drive = DApam - DAppl1;
+  for(let k=0;k<nKC;k++) eligKC[k]=eligKC[k]*aElig + spike[kcGlobal[k]];
+  if(Math.abs(drive)>1e-9){
+    for(let p=0;p<nPl;p++){
+      let nw = pW[p] - ETA*drive*eligKC[pKC[p]];
+      if(nw<0) nw=0; else if(nw>pW0[p]*1.6) nw=pW0[p]*1.6;
+      pW[p]=nw;
+    }
+  }
+  spikePrev.set(spike);
+}
+
+// ---------------------------------------------------------------------------
+// Three.js scene
+// ---------------------------------------------------------------------------
+const app=document.getElementById('app');
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+app.appendChild(renderer.domElement);
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0b0f16);
+scene.fog=new THREE.Fog(0x0b0f16, 45, 95);
+const camera=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.1,300);
+camera.position.set(0,34,34);
+const controls=new OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true; controls.maxPolarAngle=Math.PI*0.49;
+
+scene.add(new THREE.HemisphereLight(0x9db4d0,0x0a0f18,0.9));
+const dir=new THREE.DirectionalLight(0xffffff,0.7); dir.position.set(20,40,10); scene.add(dir);
+
+// arena
+const ARENA=30;
+const ground=new THREE.Mesh(new THREE.CircleGeometry(ARENA,64),
+  new THREE.MeshStandardMaterial({color:0x101827,roughness:1}));
+ground.rotation.x=-Math.PI/2; scene.add(ground);
+const grid=new THREE.GridHelper(ARENA*2,40,0x223049,0x1a2436);
+grid.position.y=0.01; scene.add(grid);
+const ring=new THREE.Mesh(new THREE.TorusGeometry(ARENA,0.15,8,80),
+  new THREE.MeshStandardMaterial({color:0x2b3b57,emissive:0x0a1220}));
+ring.rotation.x=-Math.PI/2; scene.add(ring);
+
+// stylized fly
+function makeFly(){
+  const grp=new THREE.Group();
+  const body=new THREE.MeshStandardMaterial({color:0x1c1f26,roughness:.55,metalness:.2});
+  const thorax=new THREE.Mesh(new THREE.SphereGeometry(0.8,20,16),body);
+  thorax.scale.set(1.1,0.9,0.9); grp.add(thorax);
+  const abd=new THREE.Mesh(new THREE.SphereGeometry(0.85,20,16),
+    new THREE.MeshStandardMaterial({color:0x24252b,roughness:.6}));
+  abd.scale.set(1.7,0.8,0.8); abd.position.x=-1.4; grp.add(abd);
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.55,18,14),body);
+  head.position.x=1.0; grp.add(head);
+  const eyeM=new THREE.MeshStandardMaterial({color:0xff5a4d,emissive:0x551512});
+  for(const s of [1,-1]){
+    const eye=new THREE.Mesh(new THREE.SphereGeometry(0.22,12,10),eyeM);
+    eye.position.set(1.25,0.12,0.32*s); grp.add(eye);
+  }
+  const wingM=new THREE.MeshStandardMaterial({color:0xbcd6f2,transparent:true,
+    opacity:0.28,side:THREE.DoubleSide,roughness:.3});
+  for(const s of [1,-1]){
+    const w=new THREE.Mesh(new THREE.PlaneGeometry(2.2,1.1),wingM);
+    w.position.set(-0.5,0.35,0.6*s); w.rotation.set(-0.5*s,0,-0.35); grp.add(w);
+  }
+  const legM=new THREE.MeshStandardMaterial({color:0x0e0f13});
+  for(let i=0;i<3;i++) for(const s of [1,-1]){
+    const leg=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,1.1,6),legM);
+    leg.position.set(0.4-i*0.6,-0.5,0.55*s); leg.rotation.z=0.5; leg.rotation.x=0.5*s;
+    grp.add(leg);
+  }
+  grp.scale.setScalar(0.9);
+  return grp;
+}
+const fly=makeFly(); scene.add(fly);
+const flyPos=new THREE.Vector3(0,1.1,0); let heading=0;
+
+// trail
+const TRAIL=300; const trailPos=new Float32Array(TRAIL*3);
+const trailGeo=new THREE.BufferGeometry();
+trailGeo.setAttribute('position',new THREE.BufferAttribute(trailPos,3));
+const trail=new THREE.Line(trailGeo,new THREE.LineBasicMaterial({color:0x3a506f,transparent:true,opacity:.5}));
+scene.add(trail); let trailN=0;
+
+// odor sources
+const odors=[];
+const P_SPARSE=0.06; const nEns=Math.round(P_SPARSE*nKC);
+const palette=[0x59A14F,0x4C78A8,0xF2C14E,0xB07AA1,0xE45756,0x76B7B2];
+let odorRange=7;
+function addOdor(x,z){
+  const kcSet=new Int32Array(nEns);
+  const pool=Array.from({length:nKC},(_,i)=>i);
+  for(let i=0;i<nEns;i++){ const j=i+Math.floor(Math.random()*(nKC-i)); [pool[i],pool[j]]=[pool[j],pool[i]]; kcSet[i]=pool[i]; }
+  let base=0; for(const k of kcSet) base+=kcOutSum[k]; base/=nEns;
+  const color=palette[odors.length%palette.length];
+  const mat=new THREE.MeshStandardMaterial({color,transparent:true,opacity:.5,emissive:color,emissiveIntensity:.3});
+  const mesh=new THREE.Mesh(new THREE.SphereGeometry(0.9,20,16),mat);
+  mesh.position.set(x,1.0,z); scene.add(mesh);
+  const halo=new THREE.Mesh(new THREE.RingGeometry(1.4,1.6,40),
+    new THREE.MeshBasicMaterial({color,transparent:true,opacity:.35,side:THREE.DoubleSide}));
+  halo.rotation.x=-Math.PI/2; halo.position.set(x,0.05,z); scene.add(halo);
+  odors.push({pos:new THREE.Vector3(x,1.0,z),mesh,halo,kcSet,base:base||1e-6,color,attraction:0,intensity:0});
+  renderOdorList();
+}
+
+// pointer -> place odor
+const ray=new THREE.Raycaster(); const ndc=new THREE.Vector2();
+let addMode=true;
+renderer.domElement.addEventListener('pointerdown',(ev)=>{
+  if(!addMode) return;
+  ndc.x=(ev.clientX/innerWidth)*2-1; ndc.y=-(ev.clientY/innerHeight)*2+1;
+  ray.setFromCamera(ndc,camera);
+  const hit=ray.intersectObject(ground)[0];
+  if(hit && Math.hypot(hit.point.x,hit.point.z)<ARENA-1) addOdor(hit.point.x,hit.point.z);
+});
+
+// ---------------------------------------------------------------------------
+// UI
+// ---------------------------------------------------------------------------
+const $=(id)=>document.getElementById(id);
+function toggle(btn,on){ btn.classList.toggle('on',on); }
+$('btnOdor').onclick=()=>{ addMode=!addMode; toggle($('btnOdor'),addMode); };
+const rwDown=()=>{stimRw=true;toggle($('btnRw'),true)}, rwUp=()=>{stimRw=false;toggle($('btnRw'),false)};
+const pnDown=()=>{stimPn=true;toggle($('btnPn'),true)}, pnUp=()=>{stimPn=false;toggle($('btnPn'),false)};
+$('btnRw').addEventListener('pointerdown',rwDown); $('btnRw').addEventListener('pointerup',rwUp); $('btnRw').addEventListener('pointerleave',rwUp);
+$('btnPn').addEventListener('pointerdown',pnDown); $('btnPn').addEventListener('pointerup',pnUp); $('btnPn').addEventListener('pointerleave',pnUp);
+let follow=true; $('btnFollow').onclick=()=>{ follow=!follow; toggle($('btnFollow'),follow); };
+$('btnReset').onclick=()=>{
+  for(const o of odors){ scene.remove(o.mesh); scene.remove(o.halo); }
+  odors.length=0; pW.set(pW0); recomputeKcOut(); eligKC.fill(0); DApam=DAppl1=0;
+  V.fill(0); g.fill(0); ref.fill(0); spike.fill(0); spikePrev.fill(0);
+  flyPos.set(0,1.1,0); heading=0; trailN=0; renderOdorList();
+};
+let simSpeed=6;
+$('sSpeed').oninput=e=>simSpeed=+e.target.value;
+$('sRange').oninput=e=>odorRange=+e.target.value;
+$('sEta').oninput=e=>ETA=2.2e-6*(+e.target.value/45);
+addEventListener('keydown',e=>{
+  if(e.repeat) return; const k=e.key.toLowerCase();
+  if(k==='r') rwDown(); else if(k==='p') pnDown();
+  else if(k==='o') $('btnOdor').onclick();
+  else if(k==='f') $('btnFollow').onclick();
+});
+addEventListener('keyup',e=>{ const k=e.key.toLowerCase(); if(k==='r') rwUp(); else if(k==='p') pnUp(); });
+addEventListener('resize',()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+
+function renderOdorList(){
+  const el=$('odorlist');
+  el.innerHTML='<div style="color:var(--muted);font-size:11px">Odeurs (valence apprise)</div>';
+  odors.forEach((o,i)=>{
+    const row=document.createElement('div'); row.className='o';
+    const a=Math.max(-1,Math.min(1,o.attraction));
+    const col='#'+o.color.toString(16).padStart(6,'0');
+    const pos=a>=0; const w=Math.abs(a)*50;
+    row.innerHTML=`<span class="dot" style="background:${col}"></span>
+      <span class="vbar"><i></i><b style="${pos?`left:50%;background:var(--pam)`:`right:50%;background:var(--ppl1)`};width:${w}%"></b></span>
+      <span style="width:64px;text-align:right">${pos?'approche':'évite'} ${(a*100).toFixed(0)}%</span>`;
+    el.appendChild(row);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Main loop
+// ---------------------------------------------------------------------------
+const clock=new THREE.Clock();
+function frame(){
+  requestAnimationFrame(frame);
+  const rdt=Math.min(clock.getDelta(),0.05);
+
+  // perception -> external current
+  Iext.fill(0);
+  kcActive=0;
+  for(const o of odors){
+    const dx=flyPos.x-o.pos.x, dz=flyPos.z-o.pos.z;
+    const d2=dx*dx+dz*dz;
+    const inten=Math.exp(-d2/(2*odorRange*odorRange));
+    o.intensity=inten;
+    if(inten>0.01){ for(const k of o.kcSet){ Iext[kcGlobal[k]]+=inten*I_ODOR; } }
+  }
+  if(stimRw) for(const k of idxPAM) Iext[k]+=I_STIM;
+  if(stimPn) for(const k of idxPPL1) Iext[k]+=I_STIM;
+
+  // run LIF substeps
+  let mb=0;
+  for(let s=0;s<simSpeed;s++){ step(); for(let k=0;k<nMBON;k++) mb+=spike[mbGlobal[k]]; }
+  recomputeKcOut();
+  // smoothed readouts
+  mbonRate = mbonRate*0.85 + (mb/Math.max(simSpeed,1))*0.15;
+  let ka=0; for(const o of odors) if(o.intensity>0.05) ka+=o.kcSet.length*o.intensity;
+  kcActive=kcActive*0.8 + ka*0.2;
+
+  // valence per odor from learned weights
+  for(const o of odors){
+    let drv=0; for(const k of o.kcSet) drv+=kcOutSum[k]; drv/=o.kcSet.length;
+    o.attraction = (o.base - drv)/o.base;   // + = attractive (reward), - = aversive
+    const a=Math.max(-1,Math.min(1,o.attraction));
+    const mix=new THREE.Color(o.color).lerp(new THREE.Color(a>=0?0x59A14F:0xE45756),Math.abs(a)*0.7);
+    o.mesh.material.color.copy(mix); o.mesh.material.emissive.copy(mix);
+    o.mesh.material.emissiveIntensity=0.25+o.intensity*0.6;
+    o.halo.material.color.copy(mix);
+    o.mesh.scale.setScalar(1+o.intensity*0.5);
+  }
+
+  // steering: sum of attractive/aversive pulls
+  let sx=0, sz=0;
+  for(const o of odors){
+    const dx=o.pos.x-flyPos.x, dz=o.pos.z-flyPos.z; const d=Math.hypot(dx,dz)||1;
+    const pull=o.intensity*o.attraction*3.0;
+    sx+=dx/d*pull; sz+=dz/d*pull;
+  }
+  // wander + forward bias
+  sx+=Math.cos(heading)*0.5 + (Math.random()-0.5)*0.6;
+  sz+=Math.sin(heading)*0.5 + (Math.random()-0.5)*0.6;
+  // avoid wall
+  const rr=Math.hypot(flyPos.x,flyPos.z);
+  if(rr>ARENA-4){ sx-=flyPos.x/rr*2; sz-=flyPos.z/rr*2; }
+  let target=Math.atan2(sz,sx);
+  // turn toward target (shortest angle)
+  let da=((target-heading+Math.PI*3)%(Math.PI*2))-Math.PI;
+  heading += da*Math.min(1,rdt*4);
+  const speed=7*rdt;
+  flyPos.x+=Math.cos(heading)*speed; flyPos.z+=Math.sin(heading)*speed;
+  fly.position.copy(flyPos);
+  fly.rotation.y=-heading;
+  // little wing/bob life
+  fly.position.y=1.1+Math.sin(performance.now()*0.02)*0.06;
+
+  // trail
+  if(trailN<TRAIL){ trailPos[trailN*3]=flyPos.x; trailPos[trailN*3+1]=0.2; trailPos[trailN*3+2]=flyPos.z; trailN++; }
+  else { trailPos.copyWithin(0,3); trailPos[(TRAIL-1)*3]=flyPos.x; trailPos[(TRAIL-1)*3+1]=0.2; trailPos[(TRAIL-1)*3+2]=flyPos.z; }
+  trailGeo.setDrawRange(0,trailN); trailGeo.attributes.position.needsUpdate=true;
+
+  // camera follow
+  if(follow){ controls.target.lerp(flyPos,0.1); }
+  controls.update();
+
+  // HUD
+  $('v_kc').textContent=Math.round(kcActive);
+  $('b_kc').style.width=Math.min(100,kcActive/ (nEns*1.2) *100)+'%';
+  $('v_mbon').textContent=mbonRate.toFixed(1);
+  $('b_mbon').style.width=Math.min(100,mbonRate*20)+'%';
+  $('v_da').textContent=DApam.toFixed(2);
+  $('b_da').style.width=Math.min(100,DApam*15)+'%';
+  $('v_dp').textContent=DAppl1.toFixed(2);
+  $('b_dp').style.width=Math.min(100,DAppl1*15)+'%';
+  if(odors.length && performance.now()%6<1) renderOdorList();
+
+  renderer.render(scene,camera);
+}
+frame();
+console.log('Fly Sandbox ready — N='+N+' KC='+nKC+' MBON='+nMBON+' fast='+fPre.length+' plastic='+nPl);
+</script>
+</body>
+</html>
