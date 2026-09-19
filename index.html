@@ -79,14 +79,27 @@
 <div id="hint">Clique le sol pour poser une odeur • R = récompense • P = punition • molette = zoom</div>
 
 <div id="controls" class="panel">
+  <button id="btnMode">🎮 Heat-box <span class="kbd">G</span></button>
   <button id="btnOdor" class="on">➕ Mode odeur <span class="kbd">O</span></button>
   <button id="btnRw" class="rw">🍬 Récompense <span class="kbd">R</span></button>
   <button id="btnPn" class="pn">⚡ Punition <span class="kbd">P</span></button>
+  <button id="btnFlip" style="display:none">🔀 Inverser</button>
   <div class="sld">vitesse sim<input id="sSpeed" type="range" min="1" max="12" value="6"></div>
   <div class="sld">portée odeur<input id="sRange" type="range" min="3" max="14" value="7"></div>
   <div class="sld">apprentissage<input id="sEta" type="range" min="0" max="100" value="45"></div>
   <button id="btnFollow" class="on">🎥 Suivre <span class="kbd">F</span></button>
   <button id="btnReset">♻︎ Reset</button>
+</div>
+
+<div id="game" class="panel" style="display:none;bottom:118px;left:50%;transform:translateX(-50%);min-width:320px">
+  <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px">
+    <b>Apprentissage de lieu (opérant)</b><span id="g_trial" style="color:var(--muted)">0 s</span></div>
+  <div class="meter"><div class="lab"><span>Préférence pour la zone sûre</span><span id="g_pref">50%</span></div>
+    <div class="bar"><i id="g_prefbar" style="background:var(--pam);width:50%"></i></div></div>
+  <div style="display:flex;gap:10px;font-size:11px;margin-top:4px">
+    <span id="g_state" style="flex:1">—</span>
+    <span style="color:var(--ppl1)">zone brûlante</span><span style="color:var(--pam)">zone sûre</span>
+  </div>
 </div>
 
 <div id="err" class="panel"></div>
@@ -306,6 +319,7 @@ $('btnReset').onclick=()=>{
   odors.length=0; pW.set(pW0); recomputeKcOut(); eligKC.fill(0); DApam=DAppl1=0;
   V.fill(0); g.fill(0); ref.fill(0); spike.fill(0); spikePrev.fill(0);
   flyPos.set(0,1.1,0); heading=0; trailN=0; renderOdorList();
+  if(gameMode){ baseL=ctxDrive(leftKC)||1e-6; baseR=ctxDrive(rightKC)||1e-6; prefEMA=0.5; gameTime=0; }
 };
 let simSpeed=6;
 $('sSpeed').oninput=e=>simSpeed=+e.target.value;
@@ -316,6 +330,7 @@ addEventListener('keydown',e=>{
   if(k==='r') rwDown(); else if(k==='p') pnDown();
   else if(k==='o') $('btnOdor').onclick();
   else if(k==='f') $('btnFollow').onclick();
+  else if(k==='g') $('btnMode').onclick();
 });
 addEventListener('keyup',e=>{ const k=e.key.toLowerCase(); if(k==='r') rwUp(); else if(k==='p') pnUp(); });
 addEventListener('resize',()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
@@ -336,6 +351,52 @@ function renderOdorList(){
 }
 
 // ---------------------------------------------------------------------------
+// Heat-box operant place-learning mode
+// ---------------------------------------------------------------------------
+let gameMode=false, hotIsLeft=true, prefEMA=0.5, gameTime=0;
+// context = which half the fly is in; each side has its own KC ensemble
+function pickEns(exclude){
+  const s=new Set(exclude||[]); const out=[];
+  while(out.length<nEns){ const k=(Math.random()*nKC)|0; if(!s.has(k)){s.add(k);out.push(k);} }
+  return out;
+}
+const leftKC=pickEns(), rightKC=pickEns(leftKC);
+let baseL=0, baseR=0;
+function ctxDrive(ens){ let d=0; for(const k of ens) d+=kcOutSum[k]; return d/ens.length; }
+// floor halves
+const halfMat=(c)=>new THREE.MeshStandardMaterial({color:c,transparent:true,opacity:0.55,emissive:c,emissiveIntensity:0.25,side:THREE.DoubleSide});
+const leftFloor=new THREE.Mesh(new THREE.CircleGeometry(ARENA-0.2,48,Math.PI/2,Math.PI),halfMat(0x2a6a4a));
+const rightFloor=new THREE.Mesh(new THREE.CircleGeometry(ARENA-0.2,48,-Math.PI/2,Math.PI),halfMat(0x8a2a2a));
+for(const f of [leftFloor,rightFloor]){ f.rotation.x=-Math.PI/2; f.position.y=0.03; f.visible=false; scene.add(f); }
+const boundary=new THREE.Mesh(new THREE.BoxGeometry(0.25,0.05,ARENA*2),
+  new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.4}));
+boundary.position.y=0.04; boundary.visible=false; scene.add(boundary);
+
+function paintFloors(){
+  // left/right physical sides; hot side = red, safe = green
+  const hotMesh = hotIsLeft?leftFloor:rightFloor, safeMesh = hotIsLeft?rightFloor:leftFloor;
+  hotMesh.material.color.setHex(0x8a2a2a); hotMesh.material.emissive.setHex(0x8a2a2a);
+  safeMesh.material.color.setHex(0x2a6a4a); safeMesh.material.emissive.setHex(0x2a6a4a);
+}
+function startGame(){
+  gameMode=true; $('game').style.display='block'; $('btnFlip').style.display='';
+  toggle($('btnMode'),true);
+  leftFloor.visible=rightFloor.visible=boundary.visible=true; paintFloors();
+  // clear free-mode odors
+  for(const o of odors){scene.remove(o.mesh);scene.remove(o.halo);} odors.length=0;
+  pW.set(pW0); recomputeKcOut(); eligKC.fill(0); DApam=DAppl1=0;
+  baseL=ctxDrive(leftKC)||1e-6; baseR=ctxDrive(rightKC)||1e-6;
+  prefEMA=0.5; gameTime=0;
+  flyPos.set(hotIsLeft? -ARENA*0.5 : ARENA*0.5, 1.1, 0);  // start IN the hot half
+}
+function stopGame(){
+  gameMode=false; $('game').style.display='none'; $('btnFlip').style.display='none';
+  toggle($('btnMode'),false); leftFloor.visible=rightFloor.visible=boundary.visible=false;
+}
+$('btnMode').onclick=()=> gameMode?stopGame():startGame();
+$('btnFlip').onclick=()=>{ hotIsLeft=!hotIsLeft; paintFloors(); };
+
+// ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
 const clock=new THREE.Clock();
@@ -343,71 +404,90 @@ function frame(){
   requestAnimationFrame(frame);
   const rdt=Math.min(clock.getDelta(),0.05);
 
-  // perception -> external current
-  Iext.fill(0);
-  kcActive=0;
-  for(const o of odors){
-    const dx=flyPos.x-o.pos.x, dz=flyPos.z-o.pos.z;
-    const d2=dx*dx+dz*dz;
-    const inten=Math.exp(-d2/(2*odorRange*odorRange));
-    o.intensity=inten;
-    if(inten>0.01){ for(const k of o.kcSet){ Iext[kcGlobal[k]]+=inten*I_ODOR; } }
-  }
-  if(stimRw) for(const k of idxPAM) Iext[k]+=I_STIM;
-  if(stimPn) for(const k of idxPPL1) Iext[k]+=I_STIM;
+  // ---- sensory input + reinforcement (mode-dependent) ----
+  Iext.fill(0); kcActive=0;
+  let sx=0, sz=0, arousal=0, atFood=false, painNow=false;
 
-  // run LIF substeps
+  if(!gameMode){
+    // FREE MODE: odors + manual reward/punish buttons
+    for(const o of odors){
+      const dx=flyPos.x-o.pos.x, dz=flyPos.z-o.pos.z; const d2=dx*dx+dz*dz;
+      const inten=Math.exp(-d2/(2*odorRange*odorRange)); o.intensity=inten;
+      if(inten>0.01){ for(const k of o.kcSet){ Iext[kcGlobal[k]]+=inten*I_ODOR; } }
+    }
+    if(stimRw) for(const k of idxPAM) Iext[k]+=I_STIM;
+    if(stimPn) for(const k of idxPPL1) Iext[k]+=I_STIM;
+  } else {
+    // HEAT-BOX: context = current half; reward/punish is AUTOMATIC by position
+    const onLeft=flyPos.x<0, ens=onLeft?leftKC:rightKC;
+    for(const k of ens) Iext[kcGlobal[k]]+=I_ODOR;         // immersed in this context
+    if(onLeft===hotIsLeft){ for(const k of idxPPL1) Iext[k]+=I_STIM; painNow=true; }
+    else                  { for(const k of idxPAM ) Iext[k]+=I_STIM; }
+  }
+
+  // ---- run the connectome LIF ----
   let mb=0;
   for(let s=0;s<simSpeed;s++){ step(); for(let k=0;k<nMBON;k++) mb+=spike[mbGlobal[k]]; }
   recomputeKcOut();
-  // smoothed readouts
   mbonRate = mbonRate*0.85 + (mb/Math.max(simSpeed,1))*0.15;
-  let ka=0; for(const o of odors) if(o.intensity>0.05) ka+=o.kcSet.length*o.intensity;
-  kcActive=kcActive*0.8 + ka*0.2;
 
-  // valence per odor from learned weights
-  for(const o of odors){
-    let drv=0; for(const k of o.kcSet) drv+=kcOutSum[k]; drv/=o.kcSet.length;
-    o.attraction = (o.base - drv)/o.base;   // + = attractive (reward), - = aversive
-    const a=Math.max(-1,Math.min(1,o.attraction));
-    const mix=new THREE.Color(o.color).lerp(new THREE.Color(a>=0?0x59A14F:0xE45756),Math.abs(a)*0.7);
-    o.mesh.material.color.copy(mix); o.mesh.material.emissive.copy(mix);
-    o.mesh.material.emissiveIntensity=0.25+o.intensity*0.6;
-    o.halo.material.color.copy(mix);
-    o.mesh.scale.setScalar(1+o.intensity*0.5);
+  if(!gameMode){
+    // free-mode: per-odor valence + attractive/aversive pulls
+    let ka=0;
+    for(const o of odors){
+      let drv=0; for(const k of o.kcSet) drv+=kcOutSum[k]; drv/=o.kcSet.length;
+      o.attraction=(o.base-drv)/o.base;
+      const a=Math.max(-1,Math.min(1,o.attraction));
+      const mix=new THREE.Color(o.color).lerp(new THREE.Color(a>=0?0x59A14F:0xE45756),Math.abs(a)*0.7);
+      o.mesh.material.color.copy(mix); o.mesh.material.emissive.copy(mix);
+      o.mesh.material.emissiveIntensity=0.25+o.intensity*0.6; o.halo.material.color.copy(mix);
+      o.mesh.scale.setScalar(1+o.intensity*0.5);
+      if(o.intensity>0.05) ka+=o.kcSet.length*o.intensity;
+      const dx=o.pos.x-flyPos.x, dz=o.pos.z-flyPos.z, d=Math.hypot(dx,dz)||1;
+      const pull=o.intensity*o.attraction*3.0; sx+=dx/d*pull; sz+=dz/d*pull;
+      arousal=Math.max(arousal,o.intensity);
+      if(o.intensity>0.6 && o.attraction>0.2) atFood=true;
+    }
+    kcActive=kcActive*0.8 + ka*0.2;
+  } else {
+    // heat-box: valence of each half -> flee the aversive one
+    const onLeft=flyPos.x<0, isHot=(onLeft===hotIsLeft);
+    const valL=(baseL-ctxDrive(leftKC))/baseL, valR=(baseR-ctxDrive(rightKC))/baseR;
+    const curVal=onLeft?valL:valR;
+    const safeCenterX = hotIsLeft? +ARENA*0.5 : -ARENA*0.5;
+    if(curVal < -0.02){                     // aversive -> escape toward safe half
+      sx += (safeCenterX-flyPos.x)*0.18; sz += -flyPos.z*0.04;
+    } else if(!isHot && curVal>0.05){       // comfortable -> linger near safe centre
+      sx += (safeCenterX-flyPos.x)*0.03; atFood = curVal>0.2;
+    }
+    arousal = Math.min(1, DAppl1*0.5);
+    kcActive = kcActive*0.8 + nEns*0.2;
+    const hotMesh=hotIsLeft?leftFloor:rightFloor;
+    hotMesh.material.emissiveIntensity = painNow ? 0.5+0.3*Math.sin(performance.now()*0.02) : 0.25;
+    prefEMA = prefEMA*0.997 + (isHot?0:1)*0.003; gameTime += rdt;
+    $('g_pref').textContent=(prefEMA*100).toFixed(0)+'%';
+    $('g_prefbar').style.width=(prefEMA*100).toFixed(0)+'%';
+    $('g_trial').textContent=gameTime.toFixed(0)+' s';
+    $('g_state').textContent = isHot ? '🔥 zone brûlante (douleur)' : '✅ zone sûre (plaisir)';
+    $('g_state').style.color = isHot ? 'var(--ppl1)' : 'var(--pam)';
   }
 
-  // steering: sum of attractive/aversive pulls
-  let sx=0, sz=0;
-  for(const o of odors){
-    const dx=o.pos.x-flyPos.x, dz=o.pos.z-flyPos.z; const d=Math.hypot(dx,dz)||1;
-    const pull=o.intensity*o.attraction*3.0;
-    sx+=dx/d*pull; sz+=dz/d*pull;
-  }
-  // wander + forward bias
+  // ---- shared: wander, turn, walk/stop bouts, move ----
   sx+=Math.cos(heading)*0.5 + (Math.random()-0.5)*0.6;
   sz+=Math.sin(heading)*0.5 + (Math.random()-0.5)*0.6;
-  // avoid wall
   const rr=Math.hypot(flyPos.x,flyPos.z);
   if(rr>ARENA-4){ sx-=flyPos.x/rr*2; sz-=flyPos.z/rr*2; }
   let target=Math.atan2(sz,sx);
-  // turn toward target (shortest angle) — the fly can still scan while paused
-  let da=((target-heading+Math.PI*3)%(Math.PI*2))-Math.PI;
-  heading += da*Math.min(1,rdt*4);
-  // --- intermittent walk/stop bouts (arousal shortens pauses) ---
-  let arousal=0, atFood=false;
-  for(const o of odors){ arousal=Math.max(arousal,o.intensity);
-    if(o.intensity>0.6 && o.attraction>0.2) atFood=true; }
+  let dh=((target-heading+Math.PI*3)%(Math.PI*2))-Math.PI;
+  heading += dh*Math.min(1,rdt*4);
   motorTimer-=rdt;
   if(motorTimer<=0){ moving=!moving;
     motorTimer = moving ? (1+Math.random()*3) : (0.5+Math.random()*2)*(1-0.7*arousal); }
   let speedF = moving ? 1 : 0;
-  if(atFood) speedF = 0.04;                 // stop & linger on attractive food
+  if(atFood) speedF = 0.04;
   const speed=7*rdt*speedF;
   flyPos.x+=Math.cos(heading)*speed; flyPos.z+=Math.sin(heading)*speed;
-  fly.position.copy(flyPos);
-  fly.rotation.y=-heading;
-  // bob only while walking; near-still when paused
+  fly.position.copy(flyPos); fly.rotation.y=-heading;
   fly.position.y=1.1+Math.sin(performance.now()*0.02)*(speedF>0.1?0.06:0.015);
 
   // trail
