@@ -248,6 +248,8 @@ function makeFly(){
 }
 const fly=makeFly(); scene.add(fly);
 const flyPos=new THREE.Vector3(0,1.1,0); let heading=0;
+// intermittent locomotion state (real flies walk in bouts, not continuously)
+let moving=true, motorTimer=1.5;
 
 // trail
 const TRAIL=300; const trailPos=new Float32Array(TRAIL*3);
@@ -389,15 +391,24 @@ function frame(){
   const rr=Math.hypot(flyPos.x,flyPos.z);
   if(rr>ARENA-4){ sx-=flyPos.x/rr*2; sz-=flyPos.z/rr*2; }
   let target=Math.atan2(sz,sx);
-  // turn toward target (shortest angle)
+  // turn toward target (shortest angle) — the fly can still scan while paused
   let da=((target-heading+Math.PI*3)%(Math.PI*2))-Math.PI;
   heading += da*Math.min(1,rdt*4);
-  const speed=7*rdt;
+  // --- intermittent walk/stop bouts (arousal shortens pauses) ---
+  let arousal=0, atFood=false;
+  for(const o of odors){ arousal=Math.max(arousal,o.intensity);
+    if(o.intensity>0.6 && o.attraction>0.2) atFood=true; }
+  motorTimer-=rdt;
+  if(motorTimer<=0){ moving=!moving;
+    motorTimer = moving ? (1+Math.random()*3) : (0.5+Math.random()*2)*(1-0.7*arousal); }
+  let speedF = moving ? 1 : 0;
+  if(atFood) speedF = 0.04;                 // stop & linger on attractive food
+  const speed=7*rdt*speedF;
   flyPos.x+=Math.cos(heading)*speed; flyPos.z+=Math.sin(heading)*speed;
   fly.position.copy(flyPos);
   fly.rotation.y=-heading;
-  // little wing/bob life
-  fly.position.y=1.1+Math.sin(performance.now()*0.02)*0.06;
+  // bob only while walking; near-still when paused
+  fly.position.y=1.1+Math.sin(performance.now()*0.02)*(speedF>0.1?0.06:0.015);
 
   // trail
   if(trailN<TRAIL){ trailPos[trailN*3]=flyPos.x; trailPos[trailN*3+1]=0.2; trailPos[trailN*3+2]=flyPos.z; trailN++; }
